@@ -4,6 +4,7 @@ import numpy as np
 import PIL.Image as Image
 import logging
 import torchvision.transforms as transforms
+import random
 
 # import sys
 
@@ -44,11 +45,14 @@ class Semi_Unlabeled_Dataset(Dataset):
 
 class Semi_Labeled_Dataset(Dataset):
     # reference from PES
-    def __init__(self, data, labels, transform=None, target_transform=None):
+    def __init__(
+        self, data, labels, transform=None, target_transform=None, from_array=True
+    ):
         self.train_data = np.array(data)
         self.train_labels = np.array(labels)
         self.length = len(self.train_labels)
         self.target_transform = target_transform
+        self.from_array = from_array
 
         if transform is None:
             self.transform = transforms.ToTensor()
@@ -87,26 +91,27 @@ def split_confident(outputs, clean_targets, noisy_targets):
     for i in range(0, len(noisy_targets)):
         if preds[i] == noisy_targets[i]:
             confident_indexs.append(i)
-            if clean_targets[i] == preds[i]:
+            if clean_targets is not None and clean_targets[i] == preds[i]:
                 confident_correct_num += 1
         else:
             unconfident_indexs.append(i)
-            if clean_targets[i] == preds[i]:
+            if clean_targets is not None and clean_targets[i] == preds[i]:
                 unconfident_correct_num += 1
-    logger.info(
-        "Confident sample num: {}, predict correct num: {}, predict accuracy: {}%.".format(
-            len(confident_indexs),
-            confident_correct_num,
-            round(confident_correct_num / len(confident_indexs) * 100, 2),
+    if clean_targets is not None:
+        logger.info(
+            "Confident sample num: {}, predict correct num: {}, predict accuracy: {}%.".format(
+                len(confident_indexs),
+                confident_correct_num,
+                round(confident_correct_num / len(confident_indexs) * 100, 2),
+            )
         )
-    )
-    logger.info(
-        "Unconfident sample num: {}, predict correct num: {}, predict accuracy: {}%.".format(
-            len(unconfident_indexs),
-            unconfident_correct_num,
-            round(unconfident_correct_num / len(unconfident_indexs) * 100, 2),
+        logger.info(
+            "Unconfident sample num: {}, predict correct num: {}, predict accuracy: {}%.".format(
+                len(unconfident_indexs),
+                unconfident_correct_num,
+                round(unconfident_correct_num / len(unconfident_indexs) * 100, 2),
+            )
         )
-    )
     return confident_indexs, unconfident_indexs
 
 
@@ -136,9 +141,12 @@ def pes_split(model, train_data, transform_train, clean_targets, noisy_targets, 
         shuffle=False,
     )
     soft_outputs = predict_softmax(predict_loader=predict_loader, model=model)
+    # print("soft_outputs:", soft_outputs)
     confident_indexs, unconfident_indexs = split_confident(
         soft_outputs, clean_targets, noisy_targets
     )
+    # print("confident_indexs:", confident_indexs)
+    # print("unconfident_indexs:", unconfident_indexs)
     confident_dataset = Semi_Labeled_Dataset(
         train_data[confident_indexs], noisy_targets[confident_indexs], transform_train
     )
@@ -180,6 +188,10 @@ def pes_split(model, train_data, transform_train, clean_targets, noisy_targets, 
         cw[cw == np.inf] = 0
         cw[cw > 3] = 3
     class_weights = torch.FloatTensor(cw).cuda()
+    print("confident indexs number:", len(confident_indexs))
+    print("unconfident indexs number:", len(unconfident_indexs))
+    print("train_nums:", train_nums)
+    print("class_weights:", class_weights)
     return labeled_trainloader, unlabeled_trainloader, class_weights
 
 
@@ -344,6 +356,19 @@ def update_index(
         with torch.no_grad():
             _, embedding1 = model(inputs_x1)
             _, embedding2 = model(inputs_x2)
+            if batch_idx < 10:
+                torch.save(
+                    embedding1,
+                    "prototypes/{}_{}_{}_e1.pt".format(
+                        args.dataset, args.noise_type, batch_idx
+                    ),
+                )
+                torch.save(
+                    embedding2,
+                    "prototypes/{}_{}_{}_e2.pt".format(
+                        args.dataset, args.noise_type, batch_idx
+                    ),
+                )
 
             batch_size = embedding1.size(0)
 
@@ -380,13 +405,29 @@ def update_index(
                 if noisy_targets[unconf_idx] != max_pos1:
                     noisy_targets[unconf_idx] = max_pos1
                     unconf_label_correct_num += 1
-                    if max_pos1 == clean_targets[unconf_idx]:
+                    if (
+                        clean_targets is not None
+                        and max_pos1 == clean_targets[unconf_idx]
+                    ):
                         unconf_label_correct_right_num += 1
 
                 unconf_label_add_num += 1
-                if max_pos1 == clean_targets[unconf_idx]:
+                if clean_targets is not None and max_pos1 == clean_targets[unconf_idx]:
                     unconf_label_add_right_num += 1
-
+            elif (
+                max_pos1 == max_pos2
+                and cos1[i][max_pos1] > args.cos_low_bound
+                and cos2[i][max_pos2] > args.cos_low_bound
+            ):
+                # adding labels or holding labels
+                min_val = min(cos1[i][max_pos1], cos2[i][max_pos2])
+                diff_val = args.cos_up_bound - min_val
+                diff_ratio = diff_val / (args.cos_up_bound - args.cos_low_bound)
+                random_ratio = random.random()
+                add_indexs.append(unconf_idx)
+                if random_ratio > diff_ratio and noisy_targets[unconf_idx] != max_pos1:
+                    noisy_targets[unconf_idx] = max_pos1
+                # add_labels.append(max_pos1)
             # else:
             #     print("unconf holding")
             #     add_indexs.append(unconf_idx)
@@ -460,26 +501,29 @@ def update_index(
     #         ),
     #     )
     # )
-    logger.info(
-        "in unconfident dataset, adding num: {}, right num: {}, accuracy: {}%".format(
-            unconf_label_add_num,
-            unconf_label_add_right_num,
-            round(unconf_label_add_right_num / (unconf_label_add_num + 1e-4) * 100, 2),
+    if clean_targets is not None:
+        logger.info(
+            "in unconfident dataset, adding num: {}, right num: {}, accuracy: {}%".format(
+                unconf_label_add_num,
+                unconf_label_add_right_num,
+                round(
+                    unconf_label_add_right_num / (unconf_label_add_num + 1e-4) * 100, 2
+                ),
+            )
         )
-    )
 
-    logger.info(
-        "in unconfident dataset, correct num: {}, right num: {}, accuracy: {}%".format(
-            unconf_label_correct_num,
-            unconf_label_correct_right_num,
-            round(
-                unconf_label_correct_right_num
-                / (unconf_label_correct_num + 1e-4)
-                * 100,
-                2,
-            ),
+        logger.info(
+            "in unconfident dataset, correct num: {}, right num: {}, accuracy: {}%".format(
+                unconf_label_correct_num,
+                unconf_label_correct_right_num,
+                round(
+                    unconf_label_correct_right_num
+                    / (unconf_label_correct_num + 1e-4)
+                    * 100,
+                    2,
+                ),
+            )
         )
-    )
     # logger.info(
     #     "in unconfident dataset, holding num: {}, right num: {}, accuracy: {}%".format(
     #         unconf_label_hold_num,
@@ -529,6 +573,7 @@ def proto_adjust(
     args,
 ):
     # generate prototype embedding for each class
+
     confident_dataset = Semi_Labeled_Dataset(
         train_data[confident_indexs], noisy_targets[confident_indexs], transform_train
     )
@@ -540,11 +585,11 @@ def proto_adjust(
     )
     confident_iter = iter(confident_loader)
     num_iter = int(len(confident_dataset) / args.proto_batch_size)
-    proto_embedding1 = torch.zeros(args.num_classes, 512)
-    proto_embedding2 = torch.zeros(args.num_classes, 512)
+    proto_embedding1 = torch.zeros(args.num_classes, args.last_embedding_size)
+    proto_embedding2 = torch.zeros(args.num_classes, args.last_embedding_size)
 
     # 512 is the size of the embedding before the last fully connected layer
-    proto_nums = torch.zeros(args.num_classes, 512)
+    proto_nums = torch.zeros(args.num_classes, args.last_embedding_size)
     proto_embedding1, proto_embedding2, proto_nums = (
         proto_embedding1.cuda(),
         proto_embedding2.cuda(),
@@ -577,6 +622,20 @@ def proto_adjust(
         proto_embedding2,
         proto_nums,
     )
+    torch.save(
+        proto_embedding1,
+        "prototypes/{}_{}_1.pt".format(
+            args.dataset,
+            args.noise_type,
+        ),
+    )
+    torch.save(
+        proto_embedding2,
+        "prototypes/{}_{}_2.pt".format(
+            args.dataset,
+            args.noise_type,
+        ),
+    )
     logger.info(
         "the number of prototypes in each classes: {}".format(proto_nums[:, :1])
     )
@@ -595,10 +654,11 @@ def proto_adjust(
     logger.info("Before proto-split...")
     logger.info("the number of confident samples: {}".format(len(confident_indexs)))
     logger.info("the number of unconfident samples: {}".format(len(unconfident_indexs)))
-    confident_accuracy = calculate_confident_accuracy(
-        confident_indexs, noisy_targets, clean_targets
-    )
-    logger.info("confident predict accuracy: {}%".format(confident_accuracy))
+    if clean_targets is not None:
+        confident_accuracy = calculate_confident_accuracy(
+            confident_indexs, noisy_targets, clean_targets
+        )
+        logger.info("confident predict accuracy: {}%".format(confident_accuracy))
     confident_indexs, unconfident_indexs, noisy_targets = update_index(
         model,
         proto_embedding1,
@@ -618,10 +678,11 @@ def proto_adjust(
     logger.info("After proto-split...")
     logger.info("the number of confident samples: {}".format(len(confident_indexs)))
     logger.info("the number of unconfident samples: {}".format(len(unconfident_indexs)))
-    confident_accuracy = calculate_confident_accuracy(
-        confident_indexs, noisy_targets, clean_targets
-    )
-    logger.info("confident predict accuracy: {}%".format(confident_accuracy))
+    if clean_targets is not None:
+        confident_accuracy = calculate_confident_accuracy(
+            confident_indexs, noisy_targets, clean_targets
+        )
+        logger.info("confident predict accuracy: {}%".format(confident_accuracy))
     return confident_indexs, unconfident_indexs, noisy_targets
 
 
@@ -691,4 +752,8 @@ def proto_split(model, train_data, transform_train, clean_targets, noisy_targets
         cw[cw == np.inf] = 0
         cw[cw > 3] = 3
     class_weights = torch.FloatTensor(cw).cuda()
+    print("confident indexs number:", len(confident_indexs))
+    print("unconfident indexs number:", len(unconfident_indexs))
+    print("train_nums:", train_nums)
+    print("class_weights:", class_weights)
     return labeled_trainloader, unlabeled_trainloader, class_weights

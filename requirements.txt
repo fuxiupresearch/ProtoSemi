@@ -3,3 +3,4 @@ torchvision==0.8.2
 tensorboard==2.11.2
 numpy
 scikit-learn
+timm==0.4.12

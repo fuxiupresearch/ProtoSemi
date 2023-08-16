@@ -40,7 +40,14 @@ def parse_args(parser):
         type=str,
         default="cifar10",
         help="cifar10 or cifar100",
-        choices=["cifar10", "cifar100"],
+        choices=["cifar10", "cifar100", "animal10n"],
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="resnet34",
+        help="the backbone model",
+        choices=["resnet34", "resnet152", "vgg19bn"],
     )
     parser.add_argument(
         "--is_human",
@@ -48,6 +55,37 @@ def parse_args(parser):
         default=False,
         help="whether to use human-annotated data or symmetrized data",
     )
+    """
+    Preprocessing configs for Animal10n.
+    References from https://github.com/yingyichen-cyy/JigsawViT/blob/master/noisy-label/jigsaw-vit/main.py
+    """
+    parser.add_argument(
+        "--color-jitter",
+        type=float,
+        default=None,
+        help="Color jitter factor (enabled only when not using Auto/RandAug)",
+    )
+    # The original input size in jigsaw-vit is 64
+    parser.add_argument("--input-size", default=32, type=int, help="images input size")
+    parser.add_argument(
+        "--aa",
+        type=str,
+        default="rand-m9-mstd0.5-inc1",
+        help='Use AutoAugment policy. "v0" or "original". " + "(default: rand-m9-mstd0.5-inc1)',
+    ),
+    parser.add_argument(
+        "--reprob", type=float, default=0.25, help="Random erase prob (default: 0.25)"
+    )
+    parser.add_argument(
+        "--remode",
+        type=str,
+        default="pixel",
+        help='Random erase mode (default: "pixel")',
+    )
+    parser.add_argument(
+        "--recount", type=int, default=1, help="Random erase count (default: 1)"
+    )
+
     """
     Training configs
     """

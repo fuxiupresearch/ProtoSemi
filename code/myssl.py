@@ -59,6 +59,8 @@ def mixmatch_train(
         inputs_u1, inputs_u2 = inputs_u1.cuda(), inputs_u2.cuda()
 
         with torch.no_grad():
+            # print("inputs_u1:", inputs_u1.shape)
+            # print("inputs_u2:", inputs_u2.shape)
             outputs_u1, _ = model(inputs_u1)
             outputs_u2, _ = model(inputs_u2)
             prob_u = (
@@ -84,6 +86,7 @@ def mixmatch_train(
         mixed_input = mixmatch_l * input_a + (1 - mixmatch_l) * input_b
         mixed_target = mixmatch_l * target_a + (1 - mixmatch_l) * target_b
 
+        # print("mixed_input", mixed_input.shape)
         logits, _ = model(mixed_input)
         logits_x = logits[: batch_size * 2]
         logits_u = logits[batch_size * 2 :]
