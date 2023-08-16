@@ -1,6 +1,6 @@
 # ProtoSemi
 
-This is the official repository of paper *Rethinking Noisy Label Learning in Real-world Annotation Scenarios*.
+<!-- This is the official repository of paper *Rethinking Noisy Label Learning in Real-world Annotation Scenarios*. -->
 
 ## Setup
 
